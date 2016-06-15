@@ -49,10 +49,9 @@ select * from specials) as t order by r;
 
 
 
-drop table Resultats_statistiques_rapport_distance;
-create Table Resultats_statistiques_rapport_distance(idr serial, nombre_teste float, nb_km_marge_ecart integer, nombre_echantillon integer, moyenne float, ecart_type FLOAT, isLRDP Boolean, angle_equateur_penche Float
-	CONSTRAINT resultats_statistiques_rapport_distance_pkey PRIMARY KEY (idr));
-
+drop table Resultats_statistiques_rapport_distanceHasard;
+create Table Resultats_statistiques_rapport_distanceHasard(idr serial, nombre_teste float, nb_km_marge_ecart integer, nombre_echantillon integer, moyenne float, ecart_type FLOAT,
+       							   isLRDP Boolean, angle_equateur_penche Float CONSTRAINT resultats_statistiques_rapport_distance_pkey PRIMARY KEY (idr));
 
 CREATE OR REPLACE FUNCTION generestatistiqueslrdpechantillonshasard(
     km_max integer,
@@ -91,7 +90,7 @@ $BODY$
 				select fact*pas_km as nb_km, count(diffdist), i from t2 group by fact order by fact;
 			
 		END LOOP;
-		Insert into Resultats_statistiques_rapport_distance(nombre_teste, nb_km_marge_ecart, nombre_echantillon, moyenne, ecart_Type, isLRDP, angle_equateur_penche)
+		Insert into Resultats_statistiques_rapport_distanceHasard(nombre_teste, nb_km_marge_ecart, nombre_echantillon, moyenne, ecart_Type, isLRDP, angle_equateur_penche)
 			select facteur_multiplicatif_distance_a_tester, nb_km, nbr_echantillon, moy, et, false, angle_equateur_penche from 
 			( select  nb_km, avg(match_count) as moy, stddev(match_count) as et from Tmp_Stat group by nb_km ) t order by nb_km;
 		drop table Tmp_Stat;
@@ -107,4 +106,48 @@ $BODY$
 -- Attention !! Calcul durant plusieurs jours !!!
 
 select GenereStatistiquesLRDPEchantillonsHasard(150,1,nombre,500, 0.534768882811063) from nombre_a_tester;
+
+
+create Table Resultats_statistiques_rapport_distanceLRDP(idr serial, nombre_teste float, nb_km_marge_ecart integer, nombre_site float, 
+	CONSTRAINT resultats_statistiques_rapport_distance_LRDP_pkey PRIMARY KEY (idr));
+
+
+
+with nombres_a_tester as (
+select distinct nombre_teste from Resultats_statistiques_rapport_distance where nombre_teste  order by nombre_teste
+),
+ gen(fact) as (
+ select generate_series(1,150)
+),  lieuxNormalise as (
+select * from lieux where nom not like 'Ollantaytambo' and nom not like 'Machu Piccu' 
+), t1 as (
+select l1.nom as n1, l2.nom as n2, l3.nom as n3, st_distance(l1.point, l2.point,true) as dist1,  st_distance(l2.point, l3.point,true) as dist2, st_distance(l1.point, l3.point,true) as dist3
+from lieuxNormalise l1, lieuxNormalise l2, lieuxNormalise l3
+ where l1.nom not like l2.nom and l2.nom not like l3.nom and l1.nom not like l3.nom
+), t2  as (
+select distinct nombre_teste, abs(dist1 - nombre_teste*dist2) as diffdist, fact from t1, gen, nombres_a_tester  where 
+dist1 > 150000 and dist2 > 150000 and dist3 > 150000 and abs(dist1 - nombre_teste*dist2) < 1000*fact
+)
+Insert into Resultats_statistiques_rapport_distanceLRDP(nombre_teste, nb_km_marge_ecart, nombre_site)
+	select nombre_teste, fact as nb_km, count(diffdist)  as nbsite from t2 group by fact, nombre_teste order by nombre_teste, fact;
+
+
+
+create Table Resultats_statistiques_rapport_distanceLRDPFinal(idr serial, nombre_teste float, nb_km_marge_ecart integer, nombre_site float, 
+	CONSTRAINT resultats_statistiques_rapport_distance_LRDP_pkey PRIMARY KEY (idr));
+create index on Resultats_statistiques_rapport_distanceLRDPFinal(nombre_teste);
+
+
+
+-- Requête allambiquée permettant de remplir les "trous" qui surviennent du fait que lorsqu'il y a 0 sites, ils ne sont pas remontés.
+insert into Resultats_statistiques_rapport_distanceLRDPFinal(nombre_teste, nb_km_marge_ecart, nombre_site)
+(select nombre_teste, nb_km_marge_ecart, 0 as nombre_site
+FROM ((with serie(km) as (
+select * from  generate_series(1,150)
+),
+ blancs AS ( select t.nombre_teste, km from (select distinct nombre_teste FROM Resultats_statistiques_rapport_distanceLRDP) t, serie  )
+select nombre_teste, km as nb_km_marge_ecart  from blancs)
+EXCEPT select nombre_teste, nb_km_marge_ecart from Resultats_statistiques_rapport_distanceLRDP) ASUPPR order by nombre_teste, nb_km_marge_ecart)
+UNION
+select nombre_teste, nb_km_marge_ecart, nombre_site from Resultats_statistiques_rapport_distanceLRDP order by nombre_teste, nb_km_marge_ecart;
 
